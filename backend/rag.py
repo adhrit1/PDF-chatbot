@@ -1,25 +1,76 @@
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
-from transformers import AutoTokenizer, AutoModelForCausalLM
+# rag.py
+import os
+from typing import Dict, Any, List
+import json
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageContext, load_index_from_storage
 
-
-def process_document(file_path):
-    documents = SimpleDirectoryReader(input_files = [file_path]).load_data()
-    index = VectorStoreIndex.from_documents(documents)
-    return index
-
-def rag_query(query: str, index):
-    retrieved_docs = index.retrieve(query)
+class DocumentProcessor:
+    def __init__(self):
+        # Create storage directory if it doesn't exist
+        os.makedirs("storage", exist_ok=True)
     
-    # Generate response using the retrieved documents
-    context = " ".join([doc.text for doc in retrieved_docs])
-    response = generate_response(query, context)
-    return response
+    def process_document(self, file_path: str) -> str:
+        """
+        Process a document and return the index ID
+        """
+        try:
+            # Generate a unique ID for this document
+            import uuid
+            index_id = str(uuid.uuid4())
+            
+            # Load document
+            documents = SimpleDirectoryReader(input_files=[file_path]).load_data()
+            
+            # Create index
+            index = VectorStoreIndex.from_documents(documents)
+            
+            # Save index to disk
+            index_dir = f"storage/{index_id}"
+            os.makedirs(index_dir, exist_ok=True)
+            index.storage_context.persist(persist_dir=index_dir)
+            
+            return index_id
+        except Exception as e:
+            raise Exception(f"Error processing document: {str(e)}")
 
-def generate_response(query, context):
-    tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neo-1.3B")
-    model = AutoModelForCausalLM.from_pretrained("EleutherAI/gpt-neo-1.3B")
-
-    input_text = f"Context: {context}\n\nQuestion: {query}"
-    inputs = tokenizer(input_text, return_tensors="pt")
-    outputs = model.generate(**inputs, max_length=100)
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+class RAGService:
+    def __init__(self):
+        self.indices = {}  # Cache for loaded indices
+    
+    def _load_index(self, index_id: str) -> VectorStoreIndex:
+        """
+        Load an index from storage or cache
+        """
+        if index_id in self.indices:
+            return self.indices[index_id]
+        
+        # Load index from disk
+        index_dir = f"storage/{index_id}"
+        if not os.path.exists(index_dir):
+            raise Exception(f"Index {index_id} not found")
+        
+        storage_context = StorageContext.from_defaults(persist_dir=index_dir)
+        index = load_index_from_storage(storage_context)
+        
+        # Cache the index
+        self.indices[index_id] = index
+        
+        return index
+    
+    def query(self, query: str, index_id: str) -> str:
+        """
+        Query an index and return the response
+        """
+        try:
+            # Load index
+            index = self._load_index(index_id)
+            
+            # Create query engine
+            query_engine = index.as_query_engine()
+            
+            # Get response
+            response = query_engine.query(query)
+            
+            return str(response)
+        except Exception as e:
+            raise Exception(f"Error querying index: {str(e)}")
